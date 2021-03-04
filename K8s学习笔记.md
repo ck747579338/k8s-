@@ -42,7 +42,29 @@ $ docker run busybox echo  "hello world"
 
 首先创建一个Dockerfile文件，将app.js和他放在同一个目录下，然后执行命令：
 
-$ docker build -t kubia.
+```bash
+$ vim app.js 
+const http = require('http');
+const os = require('os');
+console.log("Kubia server starting...");
+var handler = function(request, response){
+	console.log("Received request from " + request.connection.remoteAddress);
+	response.writeHead(200);
+	response.end("You've hit" + os.hostname() + "\n");	
+};
+
+var www = http.createServer(handler);
+www.listen(8080);
+```
+
+```bash
+$ vim Dockerfile 
+FROM node:7
+ADD app.js /app.js
+ENTRYPOINT ["node","app.js"]
+```
+
+$ docker build -t kubia .
 
 在当前目录下构建一个kubia镜像，Docker会在目录中找Dockerfile,然后基于其中的指令开始构建镜像
 
@@ -233,18 +255,32 @@ $ kubectl expose rc kubia --type=LoadBalancer --name kubia-http
 
 列出服务
 
-$ kubectl get services
+```bash
+$ kubectl get svc
+NAME         TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)          AGE
+kubernetes   ClusterIP      10.96.0.1        <none>        443/TCP          11m
+kubia-http   LoadBalancer   10.106.203.149   <pending>     8080:32164/TCP   11s
+```
 
 这样就能看到外部IP,就可以从外部访问应用
 
-注意：minikube不支持LoadBalancer类型的服务，因此不会产生外部IP,按上述操作也可能会报错，可以参考如下
+注意：minikube不支持LoadBalancer类型的服务，因此不会产生外部IP,一直处于挂起状态,可以使用minikube自带的命令$ minikube service <service-name>，然后会自动打开浏览器访问，或者使用curl $(minikube service <service-name> --url)命令
 
 ```bash
-$ kubectl expose pod kubia --port=9090 --name=kubia-http
-service/kubia-http exposed
-$ kubectl get svc
-NAME         TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
-kubernetes   ClusterIP   10.96.0.1       <none>        443/TCP    45h
-kubia-http   ClusterIP   10.107.83.154   <none>        9090/TCP   37s
+$ minikube service kubia-http
+|-----------|------------|-------------|---------------------------|
+| NAMESPACE |    NAME    | TARGET PORT |            URL            |
+|-----------|------------|-------------|---------------------------|
+| default   | kubia-http |        8080 | http://192.168.49.2:32164 |
+|-----------|------------|-------------|---------------------------|
+🎉  正通过默认浏览器打开服务 default/kubia-http...
+This tool has been deprecated, use 'gio open' instead.
+See 'gio help open' for more info.
+#浏览器中显示You've hitkubia
+$ curl $(minikube service kubia-http --url)
+You've hitkubia
 ```
 
+#### 异常情况
+
+我的pod service都能正常创建，从minikube中访问该应用也正常，但是无法从主机上访问，并且$ minikube dashboard 命令提示503的报错，那么需要删除用户目录下的 .kube 和 .minikube目录，执行 $ minikube delete命令删除集群，然后重新建立集群，就可以正常访问该IP端口了，并且$ minikube dashboard也不会报503的错误
