@@ -563,3 +563,356 @@ Handling connection for 8888
 下图为该过程的简化视图
 
 ![简化视图](/home/chenkai/.config/Typora/typora-user-images/image-20210306010944942.png)
+
+### 使用标签组织pod
+
+通过标签可以方便的查看系统结构以及每个pod的角色，如下图所示
+
+![示例图](/home/chenkai/.config/Typora/typora-user-images/image-20210306215211158.png)
+
+通过添加app,rel两个标签，将pod组织为两个维度（基于应用的水平维度和基于版本的纵向维度）
+
+#### 创建pod时指定标签
+
+创建一个kubia_manual_with_labels.yaml文件，并写入如下内容
+
+```bash
+$ vim kubia_manual_with_labels.yaml 
+apiVersion: v1
+kind: Pod
+metadata:
+        name: kubia-manual-v2
+        labels:								# 添加标签
+                creation_method: manual		# 设置标签
+                env: prod
+spec:
+        containers:
+        - image: ck747579338/kubia
+          name: kubia
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+```
+
+添加完成后创建pod
+
+```bash
+$ kubectl create -f kubia_manual_with_labels.yaml 
+pod/kubia-manual-v2 created
+```
+
+查看pod状态，kubectl get po默认情况不会带上标签，需要添加--show-labels选项
+
+```bash
+$ kubectl get po --show-labels		# 添加--show-labels选项查看pod附加的标签
+NAME              READY   STATUS    RESTARTS   AGE    LABELS
+kubia             1/1     Running   3          42h    run=kubia
+kubia-manual      1/1     Running   1          19h    <none>
+kubia-manual-v2   1/1     Running   0          6m3s   creation_method=manual,env=prod
+```
+
+如果只想查看某些标签
+
+```bash
+$ kubectl get po -L creation_method,env,run	#查看这几个标签
+NAME              READY   STATUS    RESTARTS   AGE   CREATION_METHOD   ENV    RUN
+kubia             1/1     Running   3          43h                            kubia
+kubia-manual      1/1     Running   1          20h                            
+kubia-manual-v2   1/1     Running   0          73m   manual            prod  
+```
+
+#### 添加pod标签
+
+将kubia-manual添加上creation_method=manual标签
+
+```bash
+$ kubectl label po kubia-manual creation_method=manual	# 给pod添加标签
+pod/kubia-manual labeled
+```
+
+#### 修改pod标签
+
+将kubia-manual-v2的env=prod修改为env=debug
+
+```bash
+$ kubectl label po kubia-manual-v2 env=debug --overwrite	# 修改标签必须带有--overwrite
+pod/kubia-manual-v2 labeled
+```
+
+查看更新后的标签
+
+```bash
+$ kubectl get po -L creation_method,env
+NAME              READY   STATUS    RESTARTS   AGE   CREATION_METHOD   ENV
+kubia             1/1     Running   3          43h                     
+kubia-manual      1/1     Running   1          20h   manual            
+kubia-manual-v2   1/1     Running   0          86m   manual            debug
+```
+
+### 通过标签选择器列出pod子集
+
+标签选择器可以根据pod的标签进行过滤
+
+#### 使用标签选择器列出pod
+
+使用-l选项对pod进行过滤
+
+```bash
+$ kubectl get po -l creation_method=manual	#查看标签creation_method=manual的pod
+NAME              READY   STATUS    RESTARTS   AGE
+kubia-manual      1/1     Running   1          20h
+kubia-manual-v2   1/1     Running   0          90m
+$ kubectl get po -l env						# 查看包含标签env（无论值是多少）的pod
+NAME              READY   STATUS    RESTARTS   AGE
+kubia-manual-v2   1/1     Running   0          90m
+$ kubectl get po -l '!env'					# 查看标签不包含env的pod
+NAME           READY   STATUS    RESTARTS   AGE
+kubia          1/1     Running   3          43h
+kubia-manual   1/1     Running   1          20h
+```
+
+也可按照以下方式进行过滤
+
+1、creation_method!=manual选择带有creation_method标签但是值不为manual的pod
+
+2、env in (prod, debug)选择标签为env,值为prod或者debug的pod
+
+3、env notin（prod,debug）选择标签为env,但是值不为prod或debug的pod
+
+#### 在标签选择器中使用多个条件
+
+使用标签选择器时，如果有多个条件，使用逗号给开
+
+```bash
+$ kubectl get po -l creation_method=manual,env=debug --show-labels
+NAME              READY   STATUS    RESTARTS   AGE    LABELS
+kubia-manual-v2   1/1     Running   0          144m   creation_method=manual,env=debug
+```
+
+### 使用标签和选择器来约束和调度pod
+
+在kubernetes中要尽量避免直接对pod指定节点来调度，而是在pod的描述文件中描述对节点的需求，让kubernetes选择符合特定标准的逻辑节点组
+
+#### 对节点添加、修改标签
+
+对节点添加、修改标签的方式与pod基本一致
+
+```bash
+$ kubectl labels node <节点名> <标签>=<值>
+```
+
+#### 将pod调度到特定节点
+
+创建pod时，添加需求
+
+```bash
+$ vim kubia_ssd.yaml 
+apiVersion: v1
+kind: Pod
+metadata:
+        name: kubia_ssd
+spec:
+		nodeSelector:
+		  sto: ssd			#节点选择器要求kubernetes只将pod部署到包含标签sto=ssd的节点上
+...
+```
+
+#### 调度到一个指定的节点
+
+除了设置节点需求，让kubernetes去选择符合要求的节点这种方式，在kubernetes中，还可以将pod调度到某一个特定的节点，每个节点都有一个唯一标签，其中键为kubernetes.io/hostname，值为该节点的实际主机名
+
+```bash
+$ kubectl get nodes -L kubernetes.io/hostname
+NAME       STATUS   ROLES                  AGE   VERSION   HOSTNAME
+minikube   Ready    control-plane,master   45h   v1.20.2   minikube
+```
+
+如果在pod描述文件中的节点选择器设置kubernetes.io/hostname: minikube,那么就会将该pod调度到这个节点下，这种方式是有风险的，如果这个节点处于离线状态，将可能会导致pod无法调度，所以在实际应用中不应该考虑某个特定的单独节点，而是通过标签选择器考虑符合特定标准的逻辑节点组
+
+#### 注解pod
+
+#### 查看pod的注解
+
+通过kubectl describe查看pod的注解（Annotations所对应的值）
+
+```bash
+$ kubectl describe po kubia-manual
+Name:         kubia-manual
+Namespace:    default
+Priority:     0
+Node:         minikube/192.168.49.2
+Start Time:   Sat, 06 Mar 2021 00:43:21 +0800
+Labels:       creation_method=manual
+Annotations:  <none>					# 注解
+Status:       Running
+IP:           172.17.0.3
+...
+```
+
+#### 添加和修改注解
+
+与添加修改标签的方式类似
+
+```bash
+$ kubectl annotate pod kubia-manual wo_shi="zhu jie"				# 添加注解
+$ kubectl describe po kubia-manual
+Name:         kubia-manual
+Namespace:    default
+Priority:     0
+Node:         minikube/192.168.49.2
+Start Time:   Sat, 06 Mar 2021 00:43:21 +0800
+Labels:       creation_method=manual
+Annotations:  wo_shi: zhu jie 										# 注解             
+Status:       Running
+IP:           172.17.0.3
+$ kubectl annotate pod kubia-manual wo_shi="xiu gai" --overwrite	# 修改注解
+$ kubectl describe po kubia-manual
+Name:         kubia-manual
+Namespace:    default
+Priority:     0
+Node:         minikube/192.168.49.2
+Start Time:   Sat, 06 Mar 2021 00:43:21 +0800
+Labels:       creation_method=manual
+Annotations:  wo_shi: xiu gai            						  	# 修改成功		
+Status:       Running
+IP:           172.17.0.3
+
+```
+
+### 使用命名空间对资源进行分组
+
+Linux命名空间：用于进程相互隔离
+
+kubernetes命名空间：为对象名称提供了一个作用域，这样可以跨不同的命名空间使用相同的资源名称，即资源名称在同一命名空间内保持唯一，在两个不同的命名空间可以使用相同的资源名称
+
+#### 发现其他命名空间及其pod
+
+查看命名空间
+
+```bash
+$ kubectl get ns
+NAME                   STATUS   AGE
+default                Active   45h
+kube-node-lease        Active   45h
+kube-public            Active   45h
+kube-system            Active   45h
+kubernetes-dashboard   Active   45h
+```
+
+查看指定命名空间下的pod
+
+```bash
+$ kubectl get po --namespace kube-system	# 也可以用-n代替--namespace
+NAME                               READY   STATUS    RESTARTS   AGE
+coredns-74ff55c5b-hhxq6            1/1     Running   3          45h
+etcd-minikube                      1/1     Running   3          45h
+kube-apiserver-minikube            1/1     Running   3          45h
+kube-controller-manager-minikube   1/1     Running   3          45h
+kube-proxy-j5wpv                   1/1     Running   3          45h
+kube-scheduler-minikube            1/1     Running   3          45h
+storage-provisioner                1/1     Running   6          45h
+```
+
+#### 创建一个命名空间
+
+第一种方式：使用YAML文件创建命名空间
+
+```bash
+$ vim custom-namespace.yaml 
+apiVersion: v1
+kind: Namespace							# 类型为namespace
+metadata:
+        name: custom-namespace			# 命名空间的名称为custom-namespace
+
+$ kubectl create -f custom-namespace.yaml 
+namespace/custom-namespace created
+$ kubectl get ns
+NAME                   STATUS   AGE
+custom-namespace       Active   20s		# 创建成功
+default                Active   45h
+kube-node-lease        Active   45h
+kube-public            Active   45h
+kube-system            Active   45h
+kubernetes-dashboard   Active   45h
+```
+
+第二种方式：使用kubectl create namespace命令创建命名空间
+
+```bash
+$ kubectl create namespace custom-namespace
+namespace/custom-namespace created
+```
+
+使用YAML文件可以强化kubernetes中所有内容都是API对象这一概念，可以通过向API服务器提交YAML manifest来实现创建、读取、更新和删除
+
+### 管理其他命名空间中的对象
+
+可以在metadata字段中添加 namespace: 命名空间名称 属性，也可以使用kubectl create创建资源时指定命名空间
+
+```bash
+$ kubectl create -f kubia_manual.yaml -n custom-namespace 
+pod/kubia-manual created
+$ kubectl get po -n custom-namespace	# 查看指定命名空间里面的pod
+NAME           READY   STATUS    RESTARTS   AGE
+kubia-manual   1/1     Running   0          16s
+```
+
+这个时候就村在两个相同名称的pod（kubia-manual），一个存在于default命名空间，一个存在于custom-namespace，在列出、描述、修改和删除其他命名空间的的对象时，需要在kubectl中使用-n(--namespace)指明命名空间，否则将会在默认的命名空间进行操作，可以通过kubectl config进行修改
+
+#### 切换命名空间
+
+```bash
+在~/.bashrc中添加
+kcd='kubectl config set-context $(kubectl config current-context) --namespace'
+然后在终端中执行一下命令就能切换
+$ kcd <命名空间名称> 
+```
+
+命名空间之间是否存在网络隔离取决于kubernetes的网络解决方案，默认情况下，命名空间不提供任何隔离
+
+### 停止和删除pod
+
+#### 按名称删除pod
+
+```bash
+$ kubectl delete pod kubia-manual-v2 
+pod "kubia-manual-v2" deleted
+```
+
+删除pod时，kubernetes像进程发起送一个SIGTERM信号，并等待（默认30s），是应用正常关闭，如果应用没有及时关闭，则通过SIGKILL终止该进程，为确保被正常关闭，需要正确处理SIGTERM信号
+
+#### 通过标签删除pod
+
+```bash
+$ kubectl get po --show-labels					# 查看pod的标签
+NAME           READY   STATUS    RESTARTS   AGE   LABELS
+kubia          1/1     Running   3          47h   run=kubia
+kubia-manual   1/1     Running   1          24h   creation_method=manual
+$ kubectl delete po -l creation_method=manual	# 删除标签creation_method=manual的pod
+pod "kubia-manual" deleted
+```
+
+#### 通过删除整个命名空间来删除pod
+
+删除命名空间，命名空间内的pod会伴随命名空间一同被删除
+
+```bash
+$ kubectl delete ns custom-namespace 
+namespace "custom-namespace" deleted
+```
+
+#### 将命名空间下的所有pod都删除
+
+```bash
+$ kubectl delete po --all
+```
+
+通过--all选项告诉kubernetes删除这个命名空间下的所有pod
+
+#### 删除命名空间下的所有资源
+
+```bash
+$ kubectl delete all --all
+```
+
+第一个all指的是所有类型，第二个all指的是所有资源，但是某些资源（secret）还是会保留下来，需要指定删除，这个操作也会删除名为kubernetes的service，但是它过几分钟就会重建
